@@ -102,12 +102,14 @@ pip install -r requirements.txt
 ```
 
 ### Dependencies List:
-- **PyQt5** (>=5.15.0): GUI framework
-- **pandas** (>=1.3.0): Data manipulation and analysis
-- **numpy** (>=1.21.0): Numerical computing
-- **matplotlib** (>=3.4.0): Data visualization
-- **scipy** (>=1.7.0): Scientific computing (for interpolation)
-- **openpyxl** (>=3.0.0): Excel file handling
+- **PyQt5**: GUI framework
+- **pandas**: Data manipulation and analysis
+- **numpy**: Numerical computing
+- **matplotlib**: Data visualization
+- **scipy**: Scientific computing (for interpolation)
+- **openpyxl**: Excel file handling
+
+**Note**: The application should work with recent versions of these packages. Tested with Python 3.7+.
 
 ## Usage
 
