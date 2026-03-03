@@ -34,6 +34,80 @@ from PyQt5.QtGui import QFont
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
 from matplotlib.figure import Figure
+from scipy import stats
+
+
+# ---------------------------------------------------------------------------
+# Helper functions ported from MATT_N_Plotting_Tool.py
+# ---------------------------------------------------------------------------
+
+def get_sensor_columns(df, sensor_type, sensor_family=None, include_cal=False):
+    """
+    Get sensor columns from dataframe supporting multiple naming conventions.
+
+    Supports:
+    - ch_zero_bme_temperature (original format)
+    - Sensor0_BME_Temp (new format)
+
+    Args:
+        df: DataFrame
+        sensor_type: 'temperature', 'pressure', or 'humidity'
+        sensor_family: 'bme', 'hdc', or None for all
+        include_cal: Whether to include calibrated columns
+
+    Returns:
+        List of matching column names
+    """
+    sensor_cols = []
+    if sensor_family:
+        sensor_family = sensor_family.lower()
+
+    type_patterns = {
+        'temperature': ['temp', 'temperature'],
+        'pressure': ['pressure', 'press'],
+        'humidity': ['humidity', 'humid'],
+    }
+    patterns = type_patterns.get(sensor_type.lower(), [sensor_type.lower()])
+
+    for col in df.columns:
+        col_lower = col.lower()
+        is_cal = 'cal' in col_lower
+        if is_cal and not include_cal:
+            continue
+        if not is_cal and include_cal:
+            continue
+        if not any(pattern in col_lower for pattern in patterns):
+            continue
+        if sensor_family:
+            if f'_{sensor_family}_' not in col_lower and not col_lower.startswith(f'{sensor_family}_'):
+                continue
+        sensor_cols.append(col)
+    return sensor_cols
+
+
+def extract_channel_info(col):
+    """
+    Extract channel number and sensor family from column name.
+
+    Supports:
+    - ch_zero_bme_temperature -> ('zero', 'bme')
+    - Sensor0_BME_Temp -> ('0', 'bme')
+    """
+    col_lower = col.lower()
+    if col_lower.startswith('ch_'):
+        parts = col.split('_')
+        if len(parts) >= 3:
+            return parts[1], parts[2].lower()
+    if 'sensor' in col_lower:
+        parts = col.split('_')
+        if len(parts) >= 2:
+            channel = ''.join(filter(str.isdigit, parts[0]))
+            family = parts[1] if len(parts) > 1 else ''
+            return channel, family.lower()
+    parts = col.split('_')
+    if len(parts) >= 2:
+        return parts[1], parts[2] if len(parts) > 2 else ''
+    return col, ''
 
 
 class DataProcessor(QThread):
@@ -828,6 +902,277 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
+    # ------------------------------------------------------------------
+    # Sensor analysis plots (ported from MATT_N_Plotting_Tool.py)
+    # ------------------------------------------------------------------
+
+    def _sensor_units(self, sensor_type):
+        return {'temperature': '°C', 'pressure': 'hPa', 'humidity': '%RH'}.get(sensor_type, '')
+
+    def plot_sensor_timeseries(self, df, columns):
+        """Plot sensor time-series for the selected columns."""
+        self.fig.clear()
+        if not columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No columns selected',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        x = df['timestamp'] if 'timestamp' in df.columns else df.index
+        xlabel = 'Time' if 'timestamp' in df.columns else 'Index'
+
+        ax = self.fig.add_subplot(111)
+        for col in columns:
+            if col in df.columns:
+                ax.plot(x, df[col], label=col, marker='o', markersize=3, linewidth=1.5)
+
+        ax.set_title(f'Time Series Plot', fontsize=14, fontweight='bold')
+        ax.set_xlabel(xlabel, fontsize=12, fontweight='bold')
+        ax.set_ylabel('Values', fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_sensor_bias(self, df, columns):
+        """Sensor bias analysis – box plot of deviations from mean."""
+        self.fig.clear()
+        if not columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No columns selected',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Filter to columns that exist in df
+        valid_cols = [col for col in columns if col in df.columns]
+        if not valid_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'Selected columns not found in data',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        sensors_df = pd.concat([df[col] for col in valid_cols], axis=1)
+        mean_values = sensors_df.mean(axis=1)
+
+        deviations = {}
+        for col in valid_cols:
+            deviations[col] = (df[col] - mean_values).dropna()
+
+        ax1, ax2 = self.fig.subplots(1, 2)
+        box_data = [deviations[col].values for col in valid_cols]
+        bp = ax1.boxplot(box_data, positions=range(len(valid_cols)), labels=valid_cols,
+                         patch_artist=True, showmeans=True,
+                         meanprops=dict(marker='D', markerfacecolor='red', markersize=8),
+                         medianprops=dict(color='black', linewidth=2))
+        colors = plt.cm.RdYlBu_r(np.linspace(0.2, 0.8, len(valid_cols)))
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        ax1.axhline(y=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
+        ax1.set_xlabel('Column', fontsize=11, fontweight='bold')
+        ax1.set_ylabel('Deviation from Mean', fontsize=11, fontweight='bold')
+        ax1.set_title('Distribution of Column Deviations', fontsize=12, fontweight='bold')
+        ax1.grid(True, alpha=0.3, axis='y')
+        ax1.tick_params(axis='x', rotation=45)
+
+        mean_biases = [deviations[col].mean() for col in valid_cols]
+        std_biases = [deviations[col].std() for col in valid_cols]
+        sorted_idx = np.argsort(mean_biases)
+        s_labels = [valid_cols[i] for i in sorted_idx]
+        s_means = [mean_biases[i] for i in sorted_idx]
+        s_stds = [std_biases[i] for i in sorted_idx]
+        bar_colors = ['red' if m < 0 else 'blue' for m in s_means]
+        ax2.barh(s_labels, s_means, xerr=s_stds, color=bar_colors, alpha=0.7, capsize=5)
+        ax2.axvline(x=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
+        ax2.set_xlabel('Mean Deviation (± std dev)', fontsize=11, fontweight='bold')
+        ax2.set_ylabel('Column', fontsize=11, fontweight='bold')
+        ax2.set_title('Column Bias Ranking\n(Red=Below Mean, Blue=Above Mean)',
+                      fontsize=12, fontweight='bold')
+        ax2.grid(True, alpha=0.3, axis='x')
+
+        self.fig.suptitle('Sensor Bias Analysis', fontsize=14, fontweight='bold')
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_relative_to_reference(self, df, columns, ref_column):
+        """Plot channels relative to reference channel (difference)."""
+        self.fig.clear()
+        
+        if not columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No columns selected',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+        
+        if ref_column not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        x = df['timestamp'] if 'timestamp' in df.columns else df.index
+        xlabel = 'Time' if 'timestamp' in df.columns else 'Index'
+        ax = self.fig.add_subplot(111)
+
+        ref_data = df[ref_column]
+        # Filter out ref_column from the columns to plot
+        plot_cols = [col for col in columns if col != ref_column and col in df.columns]
+        
+        if not plot_cols:
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        ax.axhline(y=0, color='black', linestyle='--', linewidth=2.5,
+                   label=f'{ref_column} (reference)', alpha=0.7)
+        for col in plot_cols:
+            ax.plot(x, df[col] - ref_data, label=col, marker='o', markersize=3, linewidth=1.5)
+
+        ax.set_title(f'Readings Relative to {ref_column}',
+                     fontsize=14, fontweight='bold')
+        ax.set_xlabel(xlabel, fontsize=12, fontweight='bold')
+        ax.set_ylabel(f'Difference from {ref_column}', fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_correlation_scatter(self, df, columns, ref_column):
+        """Scatter correlation plots of channels vs reference channel."""
+        self.fig.clear()
+        
+        if ref_column not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
+                    ha='center', va='center', transform=ax.transAxes, fontsize=9)
+            self.draw()
+            return
+
+        # Filter out ref_column from the columns to plot
+        plot_cols = [col for col in columns if col != ref_column and col in df.columns]
+        if not plot_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        n_cols = min(4, len(plot_cols))
+        n_rows = (len(plot_cols) + n_cols - 1) // n_cols
+        axes = self.fig.subplots(n_rows, n_cols)
+        if n_rows == 1 and n_cols == 1:
+            axes = [[axes]]
+        elif n_rows == 1:
+            axes = [axes]
+        else:
+            axes = [list(row) for row in axes]
+        flat_axes = [ax for row in axes for ax in row]
+
+        ref_data = df[ref_column].dropna()
+        for i, col in enumerate(plot_cols):
+            ch_data = df[col].dropna()
+            common = ref_data.index.intersection(ch_data.index)
+            if len(common) < 2:
+                continue
+            x_vals = ref_data.loc[common]
+            y_vals = ch_data.loc[common]
+            flat_axes[i].scatter(x_vals, y_vals, alpha=0.6, s=10)
+            slope, intercept, r_value, _, _ = stats.linregress(x_vals, y_vals)
+            lx = np.array([x_vals.min(), x_vals.max()])
+            flat_axes[i].plot(lx, slope * lx + intercept, 'r-',
+                              label=f'y={slope:.3f}x+{intercept:.3f}\nR²={r_value**2:.3f}')
+            flat_axes[i].set_xlabel(f'{ref_column}', fontsize=8)
+            flat_axes[i].set_ylabel(f'{col}', fontsize=8)
+            flat_axes[i].set_title(f'{col} vs {ref_column}', fontsize=9)
+            flat_axes[i].legend(loc='best', fontsize=7)
+            flat_axes[i].grid(True, alpha=0.3)
+
+        for i in range(len(plot_cols), len(flat_axes)):
+            flat_axes[i].set_visible(False)
+
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_vs_reference(self, df, columns, ref_column):
+        """Plot channels vs reference: scatter, residuals, and offset summary."""
+        self.fig.clear()
+        
+        if ref_column not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Filter out ref_column from the columns to plot
+        plot_cols = [col for col in columns if col != ref_column and col in df.columns]
+        if not plot_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        ax1, ax2, ax3 = self.fig.subplots(1, 3)
+        ref_data = df[ref_column].dropna()
+        channel_stats = []
+
+        for col in plot_cols:
+            ch_data = df[col].dropna()
+            common = ref_data.index.intersection(ch_data.index)
+            if len(common) < 2:
+                continue
+            x_vals = ref_data.loc[common]
+            y_vals = ch_data.loc[common]
+            slope, intercept, r_value, _, _ = stats.linregress(x_vals, y_vals)
+            mean_diff = float(np.mean(y_vals - x_vals))
+            std_diff = float(np.std(y_vals - x_vals))
+            channel_stats.append({'channel': col, 'slope': slope, 'intercept': intercept,
+                                   'mean_offset': mean_diff, 'std_offset': std_diff,
+                                   'r_squared': r_value ** 2})
+            ax1.scatter(x_vals, y_vals, alpha=0.5, s=20, label=col)
+            lx = np.array([x_vals.min(), x_vals.max()])
+            ax1.plot(lx, slope * lx + intercept, '--', alpha=0.7, linewidth=1)
+            ax2.scatter(x_vals, y_vals - x_vals, alpha=0.5, s=20, label=col)
+
+        all_vals = [df[ref_column].min(), df[ref_column].max()]
+        ax1.plot(all_vals, all_vals, 'k-', linewidth=2, label='y=x (perfect)', alpha=0.5)
+        ax1.set_title(f'Channels vs Reference {ref_column}', fontsize=10, fontweight='bold')
+        ax1.set_xlabel(f'Ref {ref_column}', fontsize=9)
+        ax1.set_ylabel('Other Channels', fontsize=9)
+        ax1.legend(loc='upper left', fontsize=7)
+        ax1.grid(True, alpha=0.3)
+
+        ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        ax2.set_title(f'Residuals from Reference {ref_column}', fontsize=10, fontweight='bold')
+        ax2.set_xlabel(f'Ref {ref_column}', fontsize=9)
+        ax2.set_ylabel('Difference', fontsize=9)
+        ax2.legend(loc='best', fontsize=7)
+        ax2.grid(True, alpha=0.3)
+
+        if channel_stats:
+            channels = [s['channel'] for s in channel_stats]
+            offsets = [s['mean_offset'] for s in channel_stats]
+            std_offsets = [s['std_offset'] for s in channel_stats]
+            colors = plt.cm.tab10(range(len(channels)))
+            ax3.barh(channels, offsets, xerr=std_offsets, color=colors, alpha=0.7, capsize=5)
+            ax3.axvline(x=0, color='k', linestyle='--', linewidth=2)
+            ax3.set_xlabel('Mean Offset from Reference (± std dev)', fontsize=9)
+            ax3.set_ylabel('Channel', fontsize=9)
+            ax3.set_title(f'Avg Offset from Ref {ref_column}', fontsize=10, fontweight='bold')
+            ax3.grid(True, alpha=0.3, axis='x')
+
+        self.fig.tight_layout()
+        self.draw()
+
 
 class MeteoDataProcessor(QMainWindow):
     """Main application window"""
@@ -862,6 +1207,7 @@ class MeteoDataProcessor(QMainWindow):
         self.start_datetime = None
         self.end_datetime = None
         self.apply_timeframe_check = None
+        self.btn_sensor_plot = None
         
         self.init_ui()
         
@@ -1254,7 +1600,49 @@ class MeteoDataProcessor(QMainWindow):
         self.btn_save_plot.clicked.connect(self.save_plot)
         self.btn_save_plot.setEnabled(False)
         control_panel.addWidget(self.btn_save_plot)
-        
+
+        # ── Sensor Analysis Plots (MATT_N) ──────────────────────────────
+        sensor_plot_group = QGroupBox("Sensor Analysis Plots")
+        sensor_plot_layout = QGridLayout()
+
+        # Plot type
+        sensor_plot_layout.addWidget(QLabel("Analysis Type:"), 0, 0)
+        self.sensor_plot_type_combo = QComboBox()
+        self.sensor_plot_type_combo.addItems([
+            "Time Series",
+            "Bias Analysis",
+            "Relative to Reference",
+            "Correlation Scatter",
+            "vs Reference",
+        ])
+        sensor_plot_layout.addWidget(self.sensor_plot_type_combo, 0, 1)
+
+        # Data columns to plot (multi-select)
+        sensor_plot_layout.addWidget(QLabel("Data Columns:"), 1, 0, Qt.AlignTop)
+        self.sensor_columns_list = QListWidget()
+        self.sensor_columns_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.sensor_columns_list.setMaximumHeight(150)
+        sensor_plot_layout.addWidget(self.sensor_columns_list, 1, 1)
+
+        # Reference column (for plots that need it)
+        sensor_plot_layout.addWidget(QLabel("Reference Column:"), 2, 0)
+        self.ref_column_combo_sensor = QComboBox()
+        sensor_plot_layout.addWidget(self.ref_column_combo_sensor, 2, 1)
+
+        # Generate button
+        self.btn_sensor_plot = QPushButton("Generate Sensor Plot")
+        self.btn_sensor_plot.clicked.connect(self.run_sensor_analysis_plot)
+        self.btn_sensor_plot.setEnabled(False)
+        self.btn_sensor_plot.setStyleSheet(
+            "QPushButton { background-color: #1565C0; color: white; "
+            "font-weight: bold; padding: 8px; }"
+        )
+        sensor_plot_layout.addWidget(self.btn_sensor_plot, 3, 0, 1, 2)
+
+        sensor_plot_group.setLayout(sensor_plot_layout)
+        control_panel.addWidget(sensor_plot_group)
+        # ────────────────────────────────────────────────────────────────
+
         control_panel.addStretch()
         layout.addLayout(control_panel, 1)
         
@@ -2179,6 +2567,268 @@ class MeteoDataProcessor(QMainWindow):
         
         self.tabs.addTab(stats_widget, "Statistics")
         
+        # ====================================================================
+        # HELP TAB
+        # ====================================================================
+        help_widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Create text browser for help content
+        help_text = QTextEdit()
+        help_text.setReadOnly(True)
+        help_text.setHtml(self.get_help_content())
+        
+        layout.addWidget(help_text)
+        help_widget.setLayout(layout)
+        self.tabs.addTab(help_widget, "Help")
+        
+    def get_help_content(self):
+        """Generate HTML help content for all features"""
+        return """
+        <html>
+        <head>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                h1 { color: #1565C0; border-bottom: 2px solid #1565C0; padding-bottom: 5px; }
+                h2 { color: #0277BD; margin-top: 20px; }
+                h3 { color: #0288D1; margin-top: 15px; }
+                .section { margin-bottom: 25px; }
+                ul { margin-left: 20px; }
+                li { margin-bottom: 5px; }
+                .note { background-color: #E3F2FD; padding: 10px; border-left: 4px solid #2196F3; margin: 10px 0; }
+                .warning { background-color: #FFF3E0; padding: 10px; border-left: 4px solid #FF9800; margin: 10px 0; }
+                code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+            </style>
+        </head>
+        <body>
+            <h1>Meteorological Data Post-Processing Tool - User Guide</h1>
+            
+            <div class="section">
+                <h2>📋 Overview</h2>
+                <p>This application provides comprehensive tools for processing, analyzing, and visualizing time-stamped CSV data files, with specialized features for meteorological sensor data analysis.</p>
+            </div>
+            
+            <div class="section">
+                <h2>📁 Import Files Tab</h2>
+                <h3>File Import</h3>
+                <ul>
+                    <li><b>Add Files:</b> Select one or multiple CSV files to process. Files are automatically scanned for date ranges.</li>
+                    <li><b>Remove Selected:</b> Remove highlighted files from the import list.</li>
+                    <li><b>Clear All:</b> Remove all files from the list.</li>
+                </ul>
+                
+                <h3>Datetime Configuration</h3>
+                <ul>
+                    <li><b>Auto-detect:</b> Automatically identifies datetime columns and formats.</li>
+                    <li><b>Specify Column:</b> Manually specify the datetime column name.</li>
+                    <li><b>Separate Date/Time:</b> Use when date and time are in separate columns.</li>
+                    <li><b>Custom Format:</b> Define a custom datetime format using strftime codes (e.g., <code>%Y-%m-%d %H:%M:%S</code>).</li>
+                </ul>
+                
+                <div class="note">
+                    <b>Note:</b> The detected date range helps you verify that files cover the expected time period.
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>⚙️ Processing Options Tab</h2>
+                <h3>Data Processing</h3>
+                <ul>
+                    <li><b>Process Files:</b> Combines all imported files and processes according to selected options.</li>
+                    <li><b>Export Processed Data:</b> Save processed data to CSV format.</li>
+                </ul>
+                
+                <h3>Resampling</h3>
+                <ul>
+                    <li><b>Enable Resampling:</b> Aggregate data to uniform time intervals.</li>
+                    <li><b>Interval:</b> Choose time interval (1min, 5min, 10min, 15min, 30min, 1hr, etc.).</li>
+                    <li><b>Aggregation Method:</b> Select how to combine data (mean, median, sum, max, min, first, last).</li>
+                </ul>
+                
+                <h3>Quality Control</h3>
+                <ul>
+                    <li><b>Remove Outliers:</b> Eliminates statistical outliers using configurable threshold.</li>
+                    <li><b>Outlier Threshold:</b> Number of standard deviations (default: 3.0).</li>
+                    <li><b>Interpolate Missing Data:</b> Fills gaps using linear, polynomial, or spline interpolation.</li>
+                    <li><b>Max Gap Size:</b> Maximum number of consecutive points to interpolate.</li>
+                </ul>
+                
+                <h3>Column Management</h3>
+                <ul>
+                    <li><b>Select Columns to Keep:</b> Choose which columns to retain in processed data.</li>
+                    <li><b>Rename Column:</b> Give columns more descriptive names.</li>
+                    <li><b>Reorder Columns:</b> Change the sequence of columns in the output.</li>
+                </ul>
+                
+                <div class="warning">
+                    <b>Warning:</b> Quality control operations modify your data. Always review results before exporting.
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>📊 Data View Tab</h2>
+                <ul>
+                    <li>View processed data in a sortable, scrollable table.</li>
+                    <li>Click column headers to sort by that column.</li>
+                    <li>Displays up to 10,000 rows for performance.</li>
+                    <li>Shows row count and column information.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>📈 Visualization Tab</h2>
+                <h3>Basic Plots</h3>
+                <ul>
+                    <li><b>Time Series:</b> Plot selected columns over time.</li>
+                    <li><b>Scatter:</b> Create X-Y scatter plots for correlation analysis.</li>
+                    <li><b>Histogram:</b> View data distribution.</li>
+                    <li><b>Box Plot:</b> Compare distributions across multiple columns.</li>
+                </ul>
+                
+                <h3>Sensor Analysis Plots</h3>
+                <p>Specialized plots for comparing multiple sensor channels:</p>
+                <ul>
+                    <li><b>Time Series:</b> Plot multiple sensor channels over time.</li>
+                    <li><b>Bias Analysis:</b> Box plots showing deviation from mean with bias ranking.</li>
+                    <li><b>Relative to Reference:</b> Show differences from a reference channel over time.</li>
+                    <li><b>Correlation Scatter:</b> Multiple scatter plots comparing each channel to reference.</li>
+                    <li><b>vs Reference:</b> Comprehensive three-panel plot showing scatter, residuals, and offset summary.</li>
+                </ul>
+                
+                <h3>Using Sensor Analysis</h3>
+                <ol>
+                    <li>Select multiple data columns from the <b>Data Columns</b> list (Ctrl+Click or Shift+Click).</li>
+                    <li>Choose a <b>Reference Column</b> for comparison plots.</li>
+                    <li>Select the plot type and click <b>Generate Sensor Plot</b>.</li>
+                </ol>
+                
+                <div class="note">
+                    <b>Tip:</b> Use the toolbar above plots to zoom, pan, and save figures.
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>🔧 Calibration Tab</h2>
+                <h3>Generate Calibration</h3>
+                <ul>
+                    <li><b>Reference Column:</b> Select the standard/truth measurement.</li>
+                    <li><b>Target Columns:</b> Select sensors to calibrate (multi-select).</li>
+                    <li><b>Calibration Method:</b>
+                        <ul>
+                            <li><i>Linear:</i> Simple offset and gain correction.</li>
+                            <li><i>Polynomial:</i> Higher-order fits for non-linear sensors.</li>
+                            <li><i>Temperature Compensation:</i> Corrects humidity sensors for temperature effects.</li>
+                            <li><i>Pressure Altitude:</i> Converts pressure to altitude.</li>
+                        </ul>
+                    </li>
+                </ul>
+                
+                <h3>Calibration Workflow</h3>
+                <ol>
+                    <li>Process your data with both reference and sensor measurements.</li>
+                    <li>Select reference and target columns.</li>
+                    <li>Click <b>Generate Calibration</b> to compute coefficients.</li>
+                    <li>(Optional) <b>Save Calibration</b> to JSON file for later use.</li>
+                    <li>(Optional) <b>Load Calibration</b> from a previous session.</li>
+                    <li>Click <b>Apply Calibration</b> to create corrected columns.</li>
+                </ol>
+                
+                <div class="note">
+                    <b>Note:</b> Calibrated columns are added with "_cal" suffix (e.g., <code>sensor_temp_cal</code>).
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>📉 Statistics Tab</h2>
+                <p>Select columns to compute comprehensive statistics:</p>
+                <ul>
+                    <li>Count, mean, median, standard deviation</li>
+                    <li>Minimum and maximum values</li>
+                    <li>25th, 50th, and 75th percentiles</li>
+                    <li>Variance and range</li>
+                </ul>
+                <p>Results are displayed in a sortable table and can be copied or exported.</p>
+            </div>
+            
+            <div class="section">
+                <h2>💡 Tips and Best Practices</h2>
+                <ul>
+                    <li><b>File Organization:</b> Name files with dates/times for easier tracking.</li>
+                    <li><b>Processing Order:</b> Import → Process → Quality Control → Calibrate → Visualize → Export.</li>
+                    <li><b>Save Your Work:</b> Export processed data and calibration coefficients regularly.</li>
+                    <li><b>Review Changes:</b> Always check the Data View after processing to verify results.</li>
+                    <li><b>Resampling:</b> Use appropriate intervals - too fine wastes space, too coarse loses detail.</li>
+                    <li><b>Sensor Comparison:</b> Use Bias Analysis to identify problematic sensors quickly.</li>
+                    <li><b>Calibration:</b> Ensure reference and sensors measure the same conditions simultaneously.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>🔍 Troubleshooting</h2>
+                <h3>Datetime Not Detected</h3>
+                <ul>
+                    <li>Use "Specify Column" and enter the exact column name.</li>
+                    <li>Try "Custom Format" if your date format is unusual.</li>
+                    <li>Check that datetime values are consistent across all files.</li>
+                </ul>
+                
+                <h3>Processing Errors</h3>
+                <ul>
+                    <li>Verify all files have the same column structure.</li>
+                    <li>Check for special characters or encoding issues in CSV files.</li>
+                    <li>Ensure datetime columns contain valid dates.</li>
+                </ul>
+                
+                <h3>Plot Issues</h3>
+                <ul>
+                    <li>Select only numeric columns for most plot types.</li>
+                    <li>Reduce number of data points if plotting is slow (use resampling).</li>
+                    <li>For sensor plots, ensure you've selected at least one data column.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>⌨️ Keyboard Shortcuts</h2>
+                <ul>
+                    <li><b>Multi-select columns:</b> Hold Ctrl and click individual items, or Shift-click for ranges.</li>
+                    <li><b>Sort table:</b> Click column headers in Data View.</li>
+                    <li><b>Plot navigation:</b> Use toolbar buttons or:
+                        <ul>
+                            <li>Pan: Hold left mouse and drag</li>
+                            <li>Zoom: Use mouse wheel or draw zoom box with right mouse button</li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>📄 Supported Date/Time Formats</h2>
+                <p>Common formats automatically detected:</p>
+                <ul>
+                    <li><code>YYYY-MM-DD HH:MM:SS</code> (ISO 8601)</li>
+                    <li><code>MM/DD/YYYY HH:MM:SS</code></li>
+                    <li><code>DD/MM/YYYY HH:MM:SS</code></li>
+                    <li><code>YYYY-MM-DD</code> (date only)</li>
+                    <li>Unix timestamps (seconds since epoch)</li>
+                </ul>
+                <p>For custom formats, use Python strftime codes:</p>
+                <ul>
+                    <li><code>%Y</code> = 4-digit year, <code>%y</code> = 2-digit year</li>
+                    <li><code>%m</code> = month (01-12), <code>%d</code> = day (01-31)</li>
+                    <li><code>%H</code> = hour (00-23), <code>%M</code> = minute (00-59), <code>%S</code> = second (00-59)</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>ℹ️ About</h2>
+                <p><b>Meteorological Data Post-Processing Tool</b></p>
+                <p>A PyQt5 GUI application for comprehensive time-series data analysis with specialized meteorological sensor support.</p>
+                <p>Key capabilities: Multi-file processing, quality control, calibration, and advanced visualization.</p>
+            </div>
+        </body>
+        </html>
+        """
+        
     def add_files(self):
         """Add CSV files to the processing list"""
         files, _ = QFileDialog.getOpenFileNames(self, "Select CSV Files", "", "CSV Files (*.csv)")
@@ -2571,6 +3221,7 @@ Max: {column_data.max():.4f}"""
             
         self.btn_plot.setEnabled(True)
         self.btn_save_plot.setEnabled(True)
+        self.btn_sensor_plot.setEnabled(True)
         
     def on_plot_type_changed(self, plot_type):
         """Handle plot type change"""
@@ -2659,6 +3310,48 @@ Max: {column_data.max():.4f}"""
             self.plot_canvas.fig.savefig(filename, dpi=150, bbox_inches='tight')
             self.update_status(f"Plot saved to {filename}")
 
+    def run_sensor_analysis_plot(self):
+        """Run the selected sensor analysis plot from MATT_N options."""
+        if self.processed_data is None:
+            QMessageBox.warning(self, "Warning", "No data loaded.")
+            return
+
+        df = self.processed_data
+        analysis_type = self.sensor_plot_type_combo.currentText()
+        
+        # Get selected columns from the multi-select list
+        selected_items = self.sensor_columns_list.selectedItems()
+        selected_columns = [item.text() for item in selected_items]
+        
+        # Get reference column
+        ref_column = self.ref_column_combo_sensor.currentText()
+        
+        if not selected_columns:
+            QMessageBox.warning(self, "Warning", "Please select at least one data column.")
+            return
+
+        if analysis_type == "Time Series":
+            self.plot_canvas.plot_sensor_timeseries(df, selected_columns)
+        elif analysis_type == "Bias Analysis":
+            self.plot_canvas.plot_sensor_bias(df, selected_columns)
+        elif analysis_type == "Relative to Reference":
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_relative_to_reference(df, selected_columns, ref_column)
+        elif analysis_type == "Correlation Scatter":
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_correlation_scatter(df, selected_columns, ref_column)
+        elif analysis_type == "vs Reference":
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_vs_reference(df, selected_columns, ref_column)
+
+        self.update_status(f"Sensor plot generated: {analysis_type}")
+
     def update_calibration_controls(self):
         """Update calibration controls when data is loaded"""
         if self.processed_data is None:
@@ -2680,6 +3373,14 @@ Max: {column_data.max():.4f}"""
         self.calib_target_list.clear()
         for col in numeric_cols:
             self.calib_target_list.addItem(col)
+        
+        # Update sensor analysis columns
+        self.sensor_columns_list.clear()
+        for col in numeric_cols:
+            self.sensor_columns_list.addItem(col)
+        
+        self.ref_column_combo_sensor.clear()
+        self.ref_column_combo_sensor.addItems(numeric_cols)
         
         # Enable apply loaded calibration if we have calibration coefficients
         if self.calibration_coefficients:
