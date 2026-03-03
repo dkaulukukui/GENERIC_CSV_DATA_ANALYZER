@@ -2567,6 +2567,268 @@ class MeteoDataProcessor(QMainWindow):
         
         self.tabs.addTab(stats_widget, "Statistics")
         
+        # ====================================================================
+        # HELP TAB
+        # ====================================================================
+        help_widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Create text browser for help content
+        help_text = QTextEdit()
+        help_text.setReadOnly(True)
+        help_text.setHtml(self.get_help_content())
+        
+        layout.addWidget(help_text)
+        help_widget.setLayout(layout)
+        self.tabs.addTab(help_widget, "Help")
+        
+    def get_help_content(self):
+        """Generate HTML help content for all features"""
+        return """
+        <html>
+        <head>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                h1 { color: #1565C0; border-bottom: 2px solid #1565C0; padding-bottom: 5px; }
+                h2 { color: #0277BD; margin-top: 20px; }
+                h3 { color: #0288D1; margin-top: 15px; }
+                .section { margin-bottom: 25px; }
+                ul { margin-left: 20px; }
+                li { margin-bottom: 5px; }
+                .note { background-color: #E3F2FD; padding: 10px; border-left: 4px solid #2196F3; margin: 10px 0; }
+                .warning { background-color: #FFF3E0; padding: 10px; border-left: 4px solid #FF9800; margin: 10px 0; }
+                code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+            </style>
+        </head>
+        <body>
+            <h1>Meteorological Data Post-Processing Tool - User Guide</h1>
+            
+            <div class="section">
+                <h2>📋 Overview</h2>
+                <p>This application provides comprehensive tools for processing, analyzing, and visualizing time-stamped CSV data files, with specialized features for meteorological sensor data analysis.</p>
+            </div>
+            
+            <div class="section">
+                <h2>📁 Import Files Tab</h2>
+                <h3>File Import</h3>
+                <ul>
+                    <li><b>Add Files:</b> Select one or multiple CSV files to process. Files are automatically scanned for date ranges.</li>
+                    <li><b>Remove Selected:</b> Remove highlighted files from the import list.</li>
+                    <li><b>Clear All:</b> Remove all files from the list.</li>
+                </ul>
+                
+                <h3>Datetime Configuration</h3>
+                <ul>
+                    <li><b>Auto-detect:</b> Automatically identifies datetime columns and formats.</li>
+                    <li><b>Specify Column:</b> Manually specify the datetime column name.</li>
+                    <li><b>Separate Date/Time:</b> Use when date and time are in separate columns.</li>
+                    <li><b>Custom Format:</b> Define a custom datetime format using strftime codes (e.g., <code>%Y-%m-%d %H:%M:%S</code>).</li>
+                </ul>
+                
+                <div class="note">
+                    <b>Note:</b> The detected date range helps you verify that files cover the expected time period.
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>⚙️ Processing Options Tab</h2>
+                <h3>Data Processing</h3>
+                <ul>
+                    <li><b>Process Files:</b> Combines all imported files and processes according to selected options.</li>
+                    <li><b>Export Processed Data:</b> Save processed data to CSV format.</li>
+                </ul>
+                
+                <h3>Resampling</h3>
+                <ul>
+                    <li><b>Enable Resampling:</b> Aggregate data to uniform time intervals.</li>
+                    <li><b>Interval:</b> Choose time interval (1min, 5min, 10min, 15min, 30min, 1hr, etc.).</li>
+                    <li><b>Aggregation Method:</b> Select how to combine data (mean, median, sum, max, min, first, last).</li>
+                </ul>
+                
+                <h3>Quality Control</h3>
+                <ul>
+                    <li><b>Remove Outliers:</b> Eliminates statistical outliers using configurable threshold.</li>
+                    <li><b>Outlier Threshold:</b> Number of standard deviations (default: 3.0).</li>
+                    <li><b>Interpolate Missing Data:</b> Fills gaps using linear, polynomial, or spline interpolation.</li>
+                    <li><b>Max Gap Size:</b> Maximum number of consecutive points to interpolate.</li>
+                </ul>
+                
+                <h3>Column Management</h3>
+                <ul>
+                    <li><b>Select Columns to Keep:</b> Choose which columns to retain in processed data.</li>
+                    <li><b>Rename Column:</b> Give columns more descriptive names.</li>
+                    <li><b>Reorder Columns:</b> Change the sequence of columns in the output.</li>
+                </ul>
+                
+                <div class="warning">
+                    <b>Warning:</b> Quality control operations modify your data. Always review results before exporting.
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>📊 Data View Tab</h2>
+                <ul>
+                    <li>View processed data in a sortable, scrollable table.</li>
+                    <li>Click column headers to sort by that column.</li>
+                    <li>Displays up to 10,000 rows for performance.</li>
+                    <li>Shows row count and column information.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>📈 Visualization Tab</h2>
+                <h3>Basic Plots</h3>
+                <ul>
+                    <li><b>Time Series:</b> Plot selected columns over time.</li>
+                    <li><b>Scatter:</b> Create X-Y scatter plots for correlation analysis.</li>
+                    <li><b>Histogram:</b> View data distribution.</li>
+                    <li><b>Box Plot:</b> Compare distributions across multiple columns.</li>
+                </ul>
+                
+                <h3>Sensor Analysis Plots</h3>
+                <p>Specialized plots for comparing multiple sensor channels:</p>
+                <ul>
+                    <li><b>Time Series:</b> Plot multiple sensor channels over time.</li>
+                    <li><b>Bias Analysis:</b> Box plots showing deviation from mean with bias ranking.</li>
+                    <li><b>Relative to Reference:</b> Show differences from a reference channel over time.</li>
+                    <li><b>Correlation Scatter:</b> Multiple scatter plots comparing each channel to reference.</li>
+                    <li><b>vs Reference:</b> Comprehensive three-panel plot showing scatter, residuals, and offset summary.</li>
+                </ul>
+                
+                <h3>Using Sensor Analysis</h3>
+                <ol>
+                    <li>Select multiple data columns from the <b>Data Columns</b> list (Ctrl+Click or Shift+Click).</li>
+                    <li>Choose a <b>Reference Column</b> for comparison plots.</li>
+                    <li>Select the plot type and click <b>Generate Sensor Plot</b>.</li>
+                </ol>
+                
+                <div class="note">
+                    <b>Tip:</b> Use the toolbar above plots to zoom, pan, and save figures.
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>🔧 Calibration Tab</h2>
+                <h3>Generate Calibration</h3>
+                <ul>
+                    <li><b>Reference Column:</b> Select the standard/truth measurement.</li>
+                    <li><b>Target Columns:</b> Select sensors to calibrate (multi-select).</li>
+                    <li><b>Calibration Method:</b>
+                        <ul>
+                            <li><i>Linear:</i> Simple offset and gain correction.</li>
+                            <li><i>Polynomial:</i> Higher-order fits for non-linear sensors.</li>
+                            <li><i>Temperature Compensation:</i> Corrects humidity sensors for temperature effects.</li>
+                            <li><i>Pressure Altitude:</i> Converts pressure to altitude.</li>
+                        </ul>
+                    </li>
+                </ul>
+                
+                <h3>Calibration Workflow</h3>
+                <ol>
+                    <li>Process your data with both reference and sensor measurements.</li>
+                    <li>Select reference and target columns.</li>
+                    <li>Click <b>Generate Calibration</b> to compute coefficients.</li>
+                    <li>(Optional) <b>Save Calibration</b> to JSON file for later use.</li>
+                    <li>(Optional) <b>Load Calibration</b> from a previous session.</li>
+                    <li>Click <b>Apply Calibration</b> to create corrected columns.</li>
+                </ol>
+                
+                <div class="note">
+                    <b>Note:</b> Calibrated columns are added with "_cal" suffix (e.g., <code>sensor_temp_cal</code>).
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>📉 Statistics Tab</h2>
+                <p>Select columns to compute comprehensive statistics:</p>
+                <ul>
+                    <li>Count, mean, median, standard deviation</li>
+                    <li>Minimum and maximum values</li>
+                    <li>25th, 50th, and 75th percentiles</li>
+                    <li>Variance and range</li>
+                </ul>
+                <p>Results are displayed in a sortable table and can be copied or exported.</p>
+            </div>
+            
+            <div class="section">
+                <h2>💡 Tips and Best Practices</h2>
+                <ul>
+                    <li><b>File Organization:</b> Name files with dates/times for easier tracking.</li>
+                    <li><b>Processing Order:</b> Import → Process → Quality Control → Calibrate → Visualize → Export.</li>
+                    <li><b>Save Your Work:</b> Export processed data and calibration coefficients regularly.</li>
+                    <li><b>Review Changes:</b> Always check the Data View after processing to verify results.</li>
+                    <li><b>Resampling:</b> Use appropriate intervals - too fine wastes space, too coarse loses detail.</li>
+                    <li><b>Sensor Comparison:</b> Use Bias Analysis to identify problematic sensors quickly.</li>
+                    <li><b>Calibration:</b> Ensure reference and sensors measure the same conditions simultaneously.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>🔍 Troubleshooting</h2>
+                <h3>Datetime Not Detected</h3>
+                <ul>
+                    <li>Use "Specify Column" and enter the exact column name.</li>
+                    <li>Try "Custom Format" if your date format is unusual.</li>
+                    <li>Check that datetime values are consistent across all files.</li>
+                </ul>
+                
+                <h3>Processing Errors</h3>
+                <ul>
+                    <li>Verify all files have the same column structure.</li>
+                    <li>Check for special characters or encoding issues in CSV files.</li>
+                    <li>Ensure datetime columns contain valid dates.</li>
+                </ul>
+                
+                <h3>Plot Issues</h3>
+                <ul>
+                    <li>Select only numeric columns for most plot types.</li>
+                    <li>Reduce number of data points if plotting is slow (use resampling).</li>
+                    <li>For sensor plots, ensure you've selected at least one data column.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>⌨️ Keyboard Shortcuts</h2>
+                <ul>
+                    <li><b>Multi-select columns:</b> Hold Ctrl and click individual items, or Shift-click for ranges.</li>
+                    <li><b>Sort table:</b> Click column headers in Data View.</li>
+                    <li><b>Plot navigation:</b> Use toolbar buttons or:
+                        <ul>
+                            <li>Pan: Hold left mouse and drag</li>
+                            <li>Zoom: Use mouse wheel or draw zoom box with right mouse button</li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>📄 Supported Date/Time Formats</h2>
+                <p>Common formats automatically detected:</p>
+                <ul>
+                    <li><code>YYYY-MM-DD HH:MM:SS</code> (ISO 8601)</li>
+                    <li><code>MM/DD/YYYY HH:MM:SS</code></li>
+                    <li><code>DD/MM/YYYY HH:MM:SS</code></li>
+                    <li><code>YYYY-MM-DD</code> (date only)</li>
+                    <li>Unix timestamps (seconds since epoch)</li>
+                </ul>
+                <p>For custom formats, use Python strftime codes:</p>
+                <ul>
+                    <li><code>%Y</code> = 4-digit year, <code>%y</code> = 2-digit year</li>
+                    <li><code>%m</code> = month (01-12), <code>%d</code> = day (01-31)</li>
+                    <li><code>%H</code> = hour (00-23), <code>%M</code> = minute (00-59), <code>%S</code> = second (00-59)</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>ℹ️ About</h2>
+                <p><b>Meteorological Data Post-Processing Tool</b></p>
+                <p>A PyQt5 GUI application for comprehensive time-series data analysis with specialized meteorological sensor support.</p>
+                <p>Key capabilities: Multi-file processing, quality control, calibration, and advanced visualization.</p>
+            </div>
+        </body>
+        </html>
+        """
+        
     def add_files(self):
         """Add CSV files to the processing list"""
         files, _ = QFileDialog.getOpenFileNames(self, "Select CSV Files", "", "CSV Files (*.csv)")
