@@ -1235,9 +1235,6 @@ class MeteoDataProcessor(QMainWindow):
         # File Import Tab
         self.create_import_tab()
         
-        # Processing Tab
-        self.create_processing_tab()
-        
         # Data View Tab
         self.create_data_tab()
         
@@ -1280,6 +1277,7 @@ class MeteoDataProcessor(QMainWindow):
         
         # File list
         self.file_list_widget = QListWidget()
+        self.file_list_widget.setMaximumHeight(130)
         file_layout.addWidget(self.file_list_widget)
         
         file_group.setLayout(file_layout)
@@ -1337,13 +1335,16 @@ class MeteoDataProcessor(QMainWindow):
         
         date_range_group.setLayout(date_range_layout)
         layout.addWidget(date_range_group)
+
+        # Processing options (moved from separate Processing tab)
+        self.add_processing_options(layout)
+
+        layout.addStretch()
         
         self.tabs.addTab(import_widget, "Import Files")
-        
-    def create_processing_tab(self):
-        """Create the processing options tab"""
-        process_widget = QWidget()
-        layout = QVBoxLayout(process_widget)
+
+    def add_processing_options(self, layout):
+        """Add processing options controls to an existing layout."""
         
         # Resampling group
         resample_group = QGroupBox("Resampling Options")
@@ -1444,9 +1445,6 @@ class MeteoDataProcessor(QMainWindow):
         note_label = QLabel("Note: After processing, use the Calibration tab to apply sensor calibrations")
         note_label.setStyleSheet("QLabel { color: #666; font-style: italic; }")
         layout.addWidget(note_label)
-        
-        layout.addStretch()
-        self.tabs.addTab(process_widget, "Processing Options")
         
     def create_data_tab(self):
         """Create the data view tab"""
@@ -2631,7 +2629,7 @@ class MeteoDataProcessor(QMainWindow):
             </div>
             
             <div class="section">
-                <h2>⚙️ Processing Options Tab</h2>
+                <h2>⚙️ Processing Options (Import Files Tab)</h2>
                 <h3>Data Processing</h3>
                 <ul>
                     <li><b>Process Files:</b> Combines all imported files and processes according to selected options.</li>
