@@ -34,6 +34,80 @@ from PyQt5.QtGui import QFont
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
 from matplotlib.figure import Figure
+from scipy import stats
+
+
+# ---------------------------------------------------------------------------
+# Helper functions ported from MATT_N_Plotting_Tool.py
+# ---------------------------------------------------------------------------
+
+def get_sensor_columns(df, sensor_type, sensor_family=None, include_cal=False):
+    """
+    Get sensor columns from dataframe supporting multiple naming conventions.
+
+    Supports:
+    - ch_zero_bme_temperature (original format)
+    - Sensor0_BME_Temp (new format)
+
+    Args:
+        df: DataFrame
+        sensor_type: 'temperature', 'pressure', or 'humidity'
+        sensor_family: 'bme', 'hdc', or None for all
+        include_cal: Whether to include calibrated columns
+
+    Returns:
+        List of matching column names
+    """
+    sensor_cols = []
+    if sensor_family:
+        sensor_family = sensor_family.lower()
+
+    type_patterns = {
+        'temperature': ['temp', 'temperature'],
+        'pressure': ['pressure', 'press'],
+        'humidity': ['humidity', 'humid'],
+    }
+    patterns = type_patterns.get(sensor_type.lower(), [sensor_type.lower()])
+
+    for col in df.columns:
+        col_lower = col.lower()
+        is_cal = 'cal' in col_lower
+        if is_cal and not include_cal:
+            continue
+        if not is_cal and include_cal:
+            continue
+        if not any(pattern in col_lower for pattern in patterns):
+            continue
+        if sensor_family:
+            if f'_{sensor_family}_' not in col_lower and not col_lower.startswith(f'{sensor_family}_'):
+                continue
+        sensor_cols.append(col)
+    return sensor_cols
+
+
+def extract_channel_info(col):
+    """
+    Extract channel number and sensor family from column name.
+
+    Supports:
+    - ch_zero_bme_temperature -> ('zero', 'bme')
+    - Sensor0_BME_Temp -> ('0', 'bme')
+    """
+    col_lower = col.lower()
+    if col_lower.startswith('ch_'):
+        parts = col.split('_')
+        if len(parts) >= 3:
+            return parts[1], parts[2].lower()
+    if 'sensor' in col_lower:
+        parts = col.split('_')
+        if len(parts) >= 2:
+            channel = ''.join(filter(str.isdigit, parts[0]))
+            family = parts[1] if len(parts) > 1 else ''
+            return channel, family.lower()
+    parts = col.split('_')
+    if len(parts) >= 2:
+        return parts[1], parts[2] if len(parts) > 2 else ''
+    return col, ''
 
 
 class DataProcessor(QThread):
@@ -828,6 +902,294 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
+    # ------------------------------------------------------------------
+    # Sensor analysis plots (ported from MATT_N_Plotting_Tool.py)
+    # ------------------------------------------------------------------
+
+    def _sensor_units(self, sensor_type):
+        return {'temperature': '°C', 'pressure': 'hPa', 'humidity': '%RH'}.get(sensor_type, '')
+
+    def plot_sensor_timeseries(self, df, sensor_type, sensor_family=None, use_calibrated=False):
+        """Plot sensor time-series for the given sensor type."""
+        self.fig.clear()
+        sensor_cols = get_sensor_columns(df, sensor_type, sensor_family, include_cal=use_calibrated)
+        if not sensor_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f'No {"calibrated " if use_calibrated else ""}'
+                    f'{sensor_family + " " if sensor_family else ""}{sensor_type} columns found',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        x = df['timestamp'] if 'timestamp' in df.columns else df.index
+        xlabel = 'Time' if 'timestamp' in df.columns else 'Index'
+
+        ax = self.fig.add_subplot(111)
+        for col in sensor_cols:
+            channel, family = extract_channel_info(col)
+            label = f'Ch {channel} ({family.upper()})' if family else col
+            ax.plot(x, df[col], label=label, marker='o', markersize=3, linewidth=1.5)
+
+        units = self._sensor_units(sensor_type)
+        suffix = ' (Calibrated)' if use_calibrated else ''
+        family_text = f' ({sensor_family.upper()})' if sensor_family else ''
+        ax.set_title(f'All {sensor_type.capitalize()} Readings{family_text}{suffix}',
+                     fontsize=14, fontweight='bold')
+        ax.set_xlabel(xlabel, fontsize=12, fontweight='bold')
+        ax.set_ylabel(f'{sensor_type.capitalize()}{suffix} ({units})', fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_sensor_bias(self, df, sensor_type, sensor_family=None):
+        """Sensor bias analysis – box plot of deviations from mean."""
+        self.fig.clear()
+        sensor_cols = get_sensor_columns(df, sensor_type, sensor_family, include_cal=False)
+        if not sensor_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5,
+                    f'No {sensor_family + " " if sensor_family else ""}{sensor_type} columns found',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        sensors_df = pd.concat([df[col] for col in sensor_cols], axis=1)
+        mean_values = sensors_df.mean(axis=1)
+
+        deviations = {}
+        sensor_labels = []
+        for col in sensor_cols:
+            channel, _ = extract_channel_info(col)
+            label = f'Ch {channel}'
+            sensor_labels.append(label)
+            deviations[label] = (df[col] - mean_values).dropna()
+
+        ax1, ax2 = self.fig.subplots(1, 2)
+        box_data = [deviations[lbl].values for lbl in sensor_labels]
+        bp = ax1.boxplot(box_data, positions=range(len(sensor_labels)), labels=sensor_labels,
+                         patch_artist=True, showmeans=True,
+                         meanprops=dict(marker='D', markerfacecolor='red', markersize=8),
+                         medianprops=dict(color='black', linewidth=2))
+        colors = plt.cm.RdYlBu_r(np.linspace(0.2, 0.8, len(sensor_labels)))
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        ax1.axhline(y=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
+        ax1.set_xlabel('Sensor Channel', fontsize=11, fontweight='bold')
+        units = self._sensor_units(sensor_type)
+        ax1.set_ylabel(f'Deviation from Mean ({units})', fontsize=11, fontweight='bold')
+        ax1.set_title('Distribution of Sensor Deviations', fontsize=12, fontweight='bold')
+        ax1.grid(True, alpha=0.3, axis='y')
+
+        mean_biases = [deviations[lbl].mean() for lbl in sensor_labels]
+        std_biases = [deviations[lbl].std() for lbl in sensor_labels]
+        sorted_idx = np.argsort(mean_biases)
+        s_labels = [sensor_labels[i] for i in sorted_idx]
+        s_means = [mean_biases[i] for i in sorted_idx]
+        s_stds = [std_biases[i] for i in sorted_idx]
+        bar_colors = ['red' if m < 0 else 'blue' for m in s_means]
+        ax2.barh(s_labels, s_means, xerr=s_stds, color=bar_colors, alpha=0.7, capsize=5)
+        ax2.axvline(x=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
+        ax2.set_xlabel(f'Mean Deviation (± std dev) ({units})', fontsize=11, fontweight='bold')
+        ax2.set_ylabel('Sensor Channel', fontsize=11, fontweight='bold')
+        ax2.set_title('Sensor Bias Ranking\n(Red=Below Mean, Blue=Above Mean)',
+                      fontsize=12, fontweight='bold')
+        ax2.grid(True, alpha=0.3, axis='x')
+
+        family_text = f' ({sensor_family.upper()})' if sensor_family else ''
+        self.fig.suptitle(f'{sensor_type.capitalize()} Sensor Bias Analysis{family_text}',
+                          fontsize=14, fontweight='bold')
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_relative_to_reference(self, df, sensor_type, ref_channel='zero', sensor_family=None):
+        """Plot channels relative to reference channel (difference)."""
+        self.fig.clear()
+        sensor_cols = get_sensor_columns(df, sensor_type, sensor_family, include_cal=False)
+        use_mean_ref = sensor_family and (ref_channel.lower() == 'zero')
+
+        if not sensor_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5,
+                    f'No {sensor_family + " " if sensor_family else ""}{sensor_type} columns found',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        x = df['timestamp'] if 'timestamp' in df.columns else df.index
+        xlabel = 'Time' if 'timestamp' in df.columns else 'Index'
+        ax = self.fig.add_subplot(111)
+
+        if use_mean_ref:
+            sensors_df = pd.concat([df[col] for col in sensor_cols], axis=1)
+            ref_data = sensors_df.mean(axis=1)
+            ref_label = f'Mean of all {sensor_family.upper()} sensors'
+            title_ref = f'Mean ({sensor_family.upper()})'
+        else:
+            ref_col = f'ch_{ref_channel}_{sensor_type}'
+            if ref_col not in df.columns:
+                ax.text(0.5, 0.5, f"Reference column '{ref_col}' not found",
+                        ha='center', va='center', transform=ax.transAxes)
+                self.draw()
+                return
+            if ref_col in sensor_cols:
+                sensor_cols = [c for c in sensor_cols if c != ref_col]
+            ref_data = df[ref_col]
+            ref_label = f'Channel {ref_channel} (reference)'
+            title_ref = f'Channel {ref_channel}'
+
+        ax.axhline(y=0, color='black', linestyle='--', linewidth=2.5,
+                   label=ref_label, alpha=0.7)
+        for col in sensor_cols:
+            channel, family = extract_channel_info(col)
+            label = f'Ch {channel} ({family.upper()})' if family else f'Ch {channel}'
+            ax.plot(x, df[col] - ref_data, label=label, marker='o', markersize=3, linewidth=1.5)
+
+        units = self._sensor_units(sensor_type)
+        family_text = f' ({sensor_family.upper()})' if sensor_family else ''
+        ax.set_title(f'{sensor_type.capitalize()} Readings Relative to {title_ref}{family_text}',
+                     fontsize=14, fontweight='bold')
+        ax.set_xlabel(xlabel, fontsize=12, fontweight='bold')
+        ax.set_ylabel(f'Difference from {title_ref} ({units})', fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_correlation_scatter(self, df, sensor_type, ref_channel='zero'):
+        """Scatter correlation plots of channels vs reference channel."""
+        self.fig.clear()
+        ref_col = f'ch_{ref_channel}_{sensor_type}'
+        if ref_col not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_col}' not found\n"
+                    f"Available: {[c for c in df.columns if sensor_type in c.lower()]}",
+                    ha='center', va='center', transform=ax.transAxes, fontsize=9)
+            self.draw()
+            return
+
+        sensor_cols = [c for c in df.columns
+                       if sensor_type.lower() in c.lower() and c != ref_col and 'cal' not in c.lower()]
+        if not sensor_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f'No other {sensor_type} channels found',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        n_cols = min(4, len(sensor_cols))
+        n_rows = (len(sensor_cols) + n_cols - 1) // n_cols
+        axes = self.fig.subplots(n_rows, n_cols)
+        if n_rows == 1 and n_cols == 1:
+            axes = [[axes]]
+        elif n_rows == 1:
+            axes = [axes]
+        else:
+            axes = [list(row) for row in axes]
+        flat_axes = [ax for row in axes for ax in row]
+
+        ref_data = df[ref_col].dropna()
+        for i, col in enumerate(sensor_cols):
+            channel = col.split('_')[1] if '_' in col else col
+            ch_data = df[col].dropna()
+            common = ref_data.index.intersection(ch_data.index)
+            if len(common) < 2:
+                continue
+            x_vals = ref_data.loc[common]
+            y_vals = ch_data.loc[common]
+            flat_axes[i].scatter(x_vals, y_vals, alpha=0.6, s=10)
+            slope, intercept, r_value, _, _ = stats.linregress(x_vals, y_vals)
+            lx = np.array([x_vals.min(), x_vals.max()])
+            flat_axes[i].plot(lx, slope * lx + intercept, 'r-',
+                              label=f'y={slope:.3f}x+{intercept:.3f}\nR²={r_value**2:.3f}')
+            flat_axes[i].set_xlabel(f'Ch {ref_channel} {sensor_type}', fontsize=8)
+            flat_axes[i].set_ylabel(f'Ch {channel} {sensor_type}', fontsize=8)
+            flat_axes[i].set_title(f'Ch {channel} vs Ch {ref_channel}', fontsize=9)
+            flat_axes[i].legend(loc='best', fontsize=7)
+            flat_axes[i].grid(True, alpha=0.3)
+
+        for i in range(len(sensor_cols), len(flat_axes)):
+            flat_axes[i].set_visible(False)
+
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_vs_reference(self, df, sensor_type, ref_channel='zero'):
+        """Plot channels vs reference: scatter, residuals, and offset summary."""
+        self.fig.clear()
+        ref_col = f'ch_{ref_channel}_{sensor_type}'
+        if ref_col not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_col}' not found",
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        sensor_cols = [c for c in df.columns
+                       if sensor_type.lower() in c.lower() and c != ref_col and 'cal' not in c.lower()]
+        if not sensor_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f'No other {sensor_type} channels found',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        ax1, ax2, ax3 = self.fig.subplots(1, 3)
+        ref_data = df[ref_col].dropna()
+        channel_stats = []
+
+        for col in sensor_cols:
+            channel = col.split('_')[1] if '_' in col else col
+            ch_data = df[col].dropna()
+            common = ref_data.index.intersection(ch_data.index)
+            if len(common) < 2:
+                continue
+            x_vals = ref_data.loc[common]
+            y_vals = ch_data.loc[common]
+            slope, intercept, r_value, _, _ = stats.linregress(x_vals, y_vals)
+            mean_diff = float(np.mean(y_vals - x_vals))
+            std_diff = float(np.std(y_vals - x_vals))
+            channel_stats.append({'channel': channel, 'slope': slope, 'intercept': intercept,
+                                   'mean_offset': mean_diff, 'std_offset': std_diff,
+                                   'r_squared': r_value ** 2})
+            ax1.scatter(x_vals, y_vals, alpha=0.5, s=20, label=f'Ch {channel}')
+            lx = np.array([x_vals.min(), x_vals.max()])
+            ax1.plot(lx, slope * lx + intercept, '--', alpha=0.7, linewidth=1)
+            ax2.scatter(x_vals, y_vals - x_vals, alpha=0.5, s=20, label=f'Ch {channel}')
+
+        all_vals = [df[ref_col].min(), df[ref_col].max()]
+        ax1.plot(all_vals, all_vals, 'k-', linewidth=2, label='y=x (perfect)', alpha=0.5)
+        ax1.set_title(f'Channels vs Reference Ch {ref_channel}', fontsize=10, fontweight='bold')
+        ax1.set_xlabel(f'Ref Ch {ref_channel} {sensor_type}', fontsize=9)
+        ax1.set_ylabel(f'Other Channels {sensor_type}', fontsize=9)
+        ax1.legend(loc='upper left', fontsize=7)
+        ax1.grid(True, alpha=0.3)
+
+        ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        ax2.set_title(f'Residuals from Reference Ch {ref_channel}', fontsize=10, fontweight='bold')
+        ax2.set_xlabel(f'Ref Ch {ref_channel} {sensor_type}', fontsize=9)
+        ax2.set_ylabel(f'Difference ({sensor_type})', fontsize=9)
+        ax2.legend(loc='best', fontsize=7)
+        ax2.grid(True, alpha=0.3)
+
+        if channel_stats:
+            channels = [s['channel'] for s in channel_stats]
+            offsets = [s['mean_offset'] for s in channel_stats]
+            std_offsets = [s['std_offset'] for s in channel_stats]
+            colors = plt.cm.tab10(range(len(channels)))
+            ax3.barh(channels, offsets, xerr=std_offsets, color=colors, alpha=0.7, capsize=5)
+            ax3.axvline(x=0, color='k', linestyle='--', linewidth=2)
+            ax3.set_xlabel('Mean Offset from Reference (± std dev)', fontsize=9)
+            ax3.set_ylabel('Channel', fontsize=9)
+            ax3.set_title(f'Avg Offset from Ref Ch {ref_channel}', fontsize=10, fontweight='bold')
+            ax3.grid(True, alpha=0.3, axis='x')
+
+        self.fig.tight_layout()
+        self.draw()
+
 
 class MeteoDataProcessor(QMainWindow):
     """Main application window"""
@@ -862,6 +1224,7 @@ class MeteoDataProcessor(QMainWindow):
         self.start_datetime = None
         self.end_datetime = None
         self.apply_timeframe_check = None
+        self.btn_sensor_plot = None
         
         self.init_ui()
         
@@ -1254,7 +1617,59 @@ class MeteoDataProcessor(QMainWindow):
         self.btn_save_plot.clicked.connect(self.save_plot)
         self.btn_save_plot.setEnabled(False)
         control_panel.addWidget(self.btn_save_plot)
-        
+
+        # ── Sensor Analysis Plots (MATT_N) ──────────────────────────────
+        sensor_plot_group = QGroupBox("Sensor Analysis Plots")
+        sensor_plot_layout = QGridLayout()
+
+        # Plot type
+        sensor_plot_layout.addWidget(QLabel("Analysis Type:"), 0, 0)
+        self.sensor_plot_type_combo = QComboBox()
+        self.sensor_plot_type_combo.addItems([
+            "Time Series",
+            "Bias Analysis",
+            "Relative to Reference",
+            "Correlation Scatter",
+            "vs Reference",
+        ])
+        sensor_plot_layout.addWidget(self.sensor_plot_type_combo, 0, 1)
+
+        # Sensor type
+        sensor_plot_layout.addWidget(QLabel("Sensor Type:"), 1, 0)
+        self.sensor_type_combo = QComboBox()
+        self.sensor_type_combo.addItems(["temperature", "pressure", "humidity"])
+        sensor_plot_layout.addWidget(self.sensor_type_combo, 1, 1)
+
+        # Sensor family
+        sensor_plot_layout.addWidget(QLabel("Sensor Family:"), 2, 0)
+        self.sensor_family_combo = QComboBox()
+        self.sensor_family_combo.addItems(["All", "BME", "HDC"])
+        sensor_plot_layout.addWidget(self.sensor_family_combo, 2, 1)
+
+        # Reference channel
+        sensor_plot_layout.addWidget(QLabel("Reference Channel:"), 3, 0)
+        self.ref_channel_edit = QLineEdit("zero")
+        self.ref_channel_edit.setPlaceholderText("e.g. zero, one, 0, 1")
+        sensor_plot_layout.addWidget(self.ref_channel_edit, 3, 1)
+
+        # Plot calibrated
+        self.plot_calibrated_check = QCheckBox("Plot Calibrated Data")
+        sensor_plot_layout.addWidget(self.plot_calibrated_check, 4, 0, 1, 2)
+
+        # Generate button
+        self.btn_sensor_plot = QPushButton("Generate Sensor Plot")
+        self.btn_sensor_plot.clicked.connect(self.run_sensor_analysis_plot)
+        self.btn_sensor_plot.setEnabled(False)
+        self.btn_sensor_plot.setStyleSheet(
+            "QPushButton { background-color: #1565C0; color: white; "
+            "font-weight: bold; padding: 8px; }"
+        )
+        sensor_plot_layout.addWidget(self.btn_sensor_plot, 5, 0, 1, 2)
+
+        sensor_plot_group.setLayout(sensor_plot_layout)
+        control_panel.addWidget(sensor_plot_group)
+        # ────────────────────────────────────────────────────────────────
+
         control_panel.addStretch()
         layout.addLayout(control_panel, 1)
         
@@ -2571,6 +2986,7 @@ Max: {column_data.max():.4f}"""
             
         self.btn_plot.setEnabled(True)
         self.btn_save_plot.setEnabled(True)
+        self.btn_sensor_plot.setEnabled(True)
         
     def on_plot_type_changed(self, plot_type):
         """Handle plot type change"""
@@ -2658,6 +3074,33 @@ Max: {column_data.max():.4f}"""
         if filename:
             self.plot_canvas.fig.savefig(filename, dpi=150, bbox_inches='tight')
             self.update_status(f"Plot saved to {filename}")
+
+    def run_sensor_analysis_plot(self):
+        """Run the selected sensor analysis plot from MATT_N options."""
+        if self.processed_data is None:
+            QMessageBox.warning(self, "Warning", "No data loaded.")
+            return
+
+        df = self.processed_data
+        analysis_type = self.sensor_plot_type_combo.currentText()
+        sensor_type = self.sensor_type_combo.currentText()
+        family_text = self.sensor_family_combo.currentText()
+        sensor_family = None if family_text == "All" else family_text.lower()
+        ref_channel = self.ref_channel_edit.text().strip() or "zero"
+        use_calibrated = self.plot_calibrated_check.isChecked()
+
+        if analysis_type == "Time Series":
+            self.plot_canvas.plot_sensor_timeseries(df, sensor_type, sensor_family, use_calibrated)
+        elif analysis_type == "Bias Analysis":
+            self.plot_canvas.plot_sensor_bias(df, sensor_type, sensor_family)
+        elif analysis_type == "Relative to Reference":
+            self.plot_canvas.plot_relative_to_reference(df, sensor_type, ref_channel, sensor_family)
+        elif analysis_type == "Correlation Scatter":
+            self.plot_canvas.plot_correlation_scatter(df, sensor_type, ref_channel)
+        elif analysis_type == "vs Reference":
+            self.plot_canvas.plot_vs_reference(df, sensor_type, ref_channel)
+
+        self.update_status(f"Sensor plot generated: {analysis_type} – {sensor_type}")
 
     def update_calibration_controls(self):
         """Update calibration controls when data is loaded"""
