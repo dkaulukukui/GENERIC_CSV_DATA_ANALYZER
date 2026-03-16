@@ -936,8 +936,8 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
-    def plot_sensor_bias(self, df, columns):
-        """Sensor bias analysis – box plot of deviations from mean."""
+    def plot_sensor_bias(self, df, columns, ref_column):
+        """Sensor bias analysis – box plot of deviations from reference sensor."""
         self.fig.clear()
         if not columns:
             ax = self.fig.add_subplot(111)
@@ -946,21 +946,27 @@ class PlotCanvas(FigureCanvas):
             self.draw()
             return
 
-        # Filter to columns that exist in df
-        valid_cols = [col for col in columns if col in df.columns]
-        if not valid_cols:
+        if ref_column not in df.columns:
             ax = self.fig.add_subplot(111)
-            ax.text(0.5, 0.5, 'Selected columns not found in data',
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
                     ha='center', va='center', transform=ax.transAxes)
             self.draw()
             return
 
-        sensors_df = pd.concat([df[col] for col in valid_cols], axis=1)
-        mean_values = sensors_df.mean(axis=1)
+        # Filter to columns that exist in df
+        valid_cols = [col for col in columns if col in df.columns and col != ref_column]
+        if not valid_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        ref_data = df[ref_column]
 
         deviations = {}
         for col in valid_cols:
-            deviations[col] = (df[col] - mean_values).dropna()
+            deviations[col] = (df[col] - ref_data).dropna()
 
         ax1, ax2 = self.fig.subplots(1, 2)
         box_data = [deviations[col].values for col in valid_cols]
@@ -974,8 +980,9 @@ class PlotCanvas(FigureCanvas):
             patch.set_alpha(0.7)
         ax1.axhline(y=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
         ax1.set_xlabel('Column', fontsize=11, fontweight='bold')
-        ax1.set_ylabel('Deviation from Mean', fontsize=11, fontweight='bold')
-        ax1.set_title('Distribution of Column Deviations', fontsize=12, fontweight='bold')
+        ax1.set_ylabel(f'Deviation from {ref_column}', fontsize=11, fontweight='bold')
+        ax1.set_title(f'Distribution of Column Deviations\n(Reference: {ref_column})',
+                      fontsize=12, fontweight='bold')
         ax1.grid(True, alpha=0.3, axis='y')
         ax1.tick_params(axis='x', rotation=45)
 
@@ -988,9 +995,9 @@ class PlotCanvas(FigureCanvas):
         bar_colors = ['red' if m < 0 else 'blue' for m in s_means]
         ax2.barh(s_labels, s_means, xerr=s_stds, color=bar_colors, alpha=0.7, capsize=5)
         ax2.axvline(x=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
-        ax2.set_xlabel('Mean Deviation (± std dev)', fontsize=11, fontweight='bold')
+        ax2.set_xlabel(f'Mean Deviation from {ref_column} (± std dev)', fontsize=11, fontweight='bold')
         ax2.set_ylabel('Column', fontsize=11, fontweight='bold')
-        ax2.set_title('Column Bias Ranking\n(Red=Below Mean, Blue=Above Mean)',
+        ax2.set_title('Column Bias Ranking\n(Red=Below Reference, Blue=Above Reference)',
                       fontsize=12, fontweight='bold')
         ax2.grid(True, alpha=0.3, axis='x')
 
@@ -1170,6 +1177,300 @@ class PlotCanvas(FigureCanvas):
             ax3.set_title(f'Avg Offset from Ref {ref_column}', fontsize=10, fontweight='bold')
             ax3.grid(True, alpha=0.3, axis='x')
 
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_vs_reference_delay_adjusted(self, df, columns, ref_column):
+        """Plot channels vs reference with delay adjustment using cross-correlation.
+        
+        Calculates the delay for each sensor, shifts the data to align with reference,
+        then creates the same 3-panel comparison as plot_vs_reference.
+        """
+        self.fig.clear()
+        
+        if ref_column not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Filter out ref_column from the columns to plot
+        plot_cols = [col for col in columns if col != ref_column and col in df.columns]
+        if not plot_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Calculate delays using helper to ensure consistency with delay_analysis plot
+        delays = self._calculate_sensor_delays(df, plot_cols, ref_column)
+        
+        # Create delay-adjusted dataframe
+        df_adjusted = df.copy()
+        for col in plot_cols:
+            delay = delays[col]
+            if delay != 0:
+                # Shift the data by the delay (positive delay = shift forward, negative = shift backward)
+                df_adjusted[col] = df_adjusted[col].shift(-delay)
+        
+        # Now create the same 3-panel plot as vs_reference but with adjusted data
+        ax1, ax2, ax3 = self.fig.subplots(1, 3)
+        ref_data_adj = df_adjusted[ref_column].dropna()
+        channel_stats = []
+
+        for col in plot_cols:
+            ch_data = df_adjusted[col].dropna()
+            common = ref_data_adj.index.intersection(ch_data.index)
+            if len(common) < 2:
+                continue
+            x_vals = ref_data_adj.loc[common]
+            y_vals = ch_data.loc[common]
+            slope, intercept, r_value, _, _ = stats.linregress(x_vals, y_vals)
+            mean_diff = float(np.mean(y_vals - x_vals))
+            std_diff = float(np.std(y_vals - x_vals))
+            channel_stats.append({'channel': col, 'slope': slope, 'intercept': intercept,
+                                   'mean_offset': mean_diff, 'std_offset': std_diff,
+                                   'r_squared': r_value ** 2, 'delay': delays[col]})
+            ax1.scatter(x_vals, y_vals, alpha=0.5, s=20, label=f"{col} (delay:{delays[col]})")
+            lx = np.array([x_vals.min(), x_vals.max()])
+            ax1.plot(lx, slope * lx + intercept, '--', alpha=0.7, linewidth=1)
+            ax2.scatter(x_vals, y_vals - x_vals, alpha=0.5, s=20, label=f"{col} (delay:{delays[col]})")
+
+        all_vals = [df_adjusted[ref_column].min(), df_adjusted[ref_column].max()]
+        ax1.plot(all_vals, all_vals, 'k-', linewidth=2, label='y=x (perfect)', alpha=0.5)
+        ax1.set_title(f'Channels vs Reference {ref_column}\n(Delay Adjusted)', fontsize=10, fontweight='bold')
+        ax1.set_xlabel(f'Ref {ref_column}', fontsize=9)
+        ax1.set_ylabel('Other Channels', fontsize=9)
+        ax1.legend(loc='upper left', fontsize=7)
+        ax1.grid(True, alpha=0.3)
+
+        ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        ax2.set_title(f'Residuals from Reference {ref_column}\n(Delay Adjusted)', fontsize=10, fontweight='bold')
+        ax2.set_xlabel(f'Ref {ref_column}', fontsize=9)
+        ax2.set_ylabel('Difference', fontsize=9)
+        ax2.legend(loc='best', fontsize=7)
+        ax2.grid(True, alpha=0.3)
+
+        if channel_stats:
+            channels = [f"{s['channel']}\n(delay:{s['delay']})" for s in channel_stats]
+            offsets = [s['mean_offset'] for s in channel_stats]
+            std_offsets = [s['std_offset'] for s in channel_stats]
+            colors = plt.cm.tab10(range(len(channels)))
+            ax3.barh(channels, offsets, xerr=std_offsets, color=colors, alpha=0.7, capsize=5)
+            ax3.axvline(x=0, color='k', linestyle='--', linewidth=2)
+            ax3.set_xlabel('Mean Offset from Reference (± std dev)', fontsize=9)
+            ax3.set_ylabel('Channel', fontsize=9)
+            ax3.set_title(f'Avg Offset from Ref {ref_column}\n(Delay Adjusted)', fontsize=10, fontweight='bold')
+            ax3.grid(True, alpha=0.3, axis='x')
+
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_difference_vs_roc(self, df, columns, ref_column):
+        """Plot sensor difference vs rate of change of reference column.
+        
+        X-axis: Rate of change (derivative) of reference sensor
+        Y-axis: Difference between sensor and reference
+        """
+        self.fig.clear()
+        
+        if ref_column not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Filter out ref_column from the columns to plot
+        plot_cols = [col for col in columns if col != ref_column and col in df.columns]
+        if not plot_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Calculate rate of change of reference column
+        ref_data = df[ref_column].copy()
+        ref_roc = ref_data.diff()  # Rate of change (derivative)
+        
+        ax = self.fig.add_subplot(111)
+        colors = plt.cm.tab10(range(len(plot_cols)))
+        
+        for col_idx, col in enumerate(plot_cols):
+            ch_data = df[col].copy()
+            
+            # Calculate difference from reference
+            difference = ch_data - ref_data
+            
+            # Remove NaN values for plotting
+            valid_idx = ~(ref_roc.isna() | difference.isna())
+            x_vals = ref_roc[valid_idx]
+            y_vals = difference[valid_idx]
+            
+            if len(x_vals) < 2:
+                continue
+            
+            # Create scatter plot
+            ax.scatter(x_vals, y_vals, alpha=0.6, s=30, 
+                      label=col, color=colors[col_idx], edgecolors='black', linewidth=0.5)
+        
+        # Add zero lines for reference
+        ax.axhline(y=0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label='Zero difference')
+        ax.axvline(x=0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+        
+        ax.set_xlabel(f'Rate of Change of {ref_column}', fontsize=12, fontweight='bold')
+        ax.set_ylabel(f'Difference from {ref_column}', fontsize=12, fontweight='bold')
+        ax.set_title(f'Sensor Difference vs {ref_column} Rate of Change',
+                    fontsize=13, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        
+        self.fig.tight_layout()
+        self.draw()
+
+    def _calculate_sensor_delays(self, df, columns, ref_column):
+        """Helper method to calculate delays between sensors and reference.
+        
+        Returns a dictionary with delays for each column.
+        Uses consistent cross-correlation calculation across all methods.
+        """
+        # Get reference data - dropna first for clean normalization
+        ref_data = df[ref_column].dropna()
+        
+        # Normalize reference for correlation calculation
+        ref_normalized = (ref_data - ref_data.mean()) / (ref_data.std() + 1e-10)
+        
+        # Calculate delays using cross-correlation
+        delays = {}
+        
+        for col in columns:
+            if col == ref_column or col not in df.columns:
+                continue
+            
+            sensor_data = df[col].dropna()
+            
+            # Align indices using the clean (dropna'd) data
+            common_idx = ref_data.index.intersection(sensor_data.index)
+            if len(common_idx) < 10:  # Need minimum data points
+                delays[col] = 0
+                continue
+            
+            ref_aligned = ref_normalized.loc[common_idx].values
+            sensor_aligned = sensor_data.loc[common_idx].values
+            
+            # Normalize sensor data
+            sensor_normalized = (sensor_aligned - sensor_aligned.mean()) / (sensor_aligned.std() + 1e-10)
+            
+            # Calculate cross-correlation
+            correlation = np.correlate(sensor_normalized, ref_aligned, mode='full')
+            lags = np.arange(-len(ref_aligned) + 1, len(ref_aligned))
+            
+            # Find the lag with maximum correlation
+            max_corr_idx = np.argmax(np.abs(correlation))
+            delay_samples = lags[max_corr_idx]
+            
+            # Store result
+            delays[col] = delay_samples
+        
+        return delays
+
+    def plot_delay_analysis(self, df, columns, ref_column):
+        """Plot delay/lag between sensor and reference using cross-correlation.
+        
+        Calculates the time delay between each sensor's response and the reference sensor.
+        Positive delay means sensor lags behind reference; negative means sensor leads.
+        """
+        self.fig.clear()
+        
+        if ref_column not in df.columns:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Reference column '{ref_column}' not found",
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Filter out ref_column from the columns to plot
+        plot_cols = [col for col in columns if col != ref_column and col in df.columns]
+        if not plot_cols:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data columns to compare against reference',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+
+        # Use helper to calculate delays
+        delays = self._calculate_sensor_delays(df, plot_cols, ref_column)
+        
+        if not delays:
+            ax = self.fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'Unable to calculate delays for selected columns',
+                    ha='center', va='center', transform=ax.transAxes)
+            self.draw()
+            return
+        
+        # Get reference data for correlation strength calculation
+        ref_data = df[ref_column].dropna()
+        ref_normalized = (ref_data - ref_data.mean()) / (ref_data.std() + 1e-10)
+        
+        max_correlations = {}
+        for col in plot_cols:
+            sensor_data = df[col].dropna()
+            common_idx = ref_data.index.intersection(sensor_data.index)
+            
+            if len(common_idx) < 10:
+                max_correlations[col] = 0
+                continue
+            
+            ref_aligned = ref_normalized.loc[common_idx].values
+            sensor_aligned = sensor_data.loc[common_idx].values
+            sensor_normalized = (sensor_aligned - sensor_aligned.mean()) / (sensor_aligned.std() + 1e-10)
+            
+            correlation = np.correlate(sensor_normalized, ref_aligned, mode='full')
+            max_corr_idx = np.argmax(np.abs(correlation))
+            max_correlations[col] = correlation[max_corr_idx]
+        
+        # Create visualization with 2 subplots: delays and correlation strengths
+        ax1, ax2 = self.fig.subplots(1, 2)
+        
+        # Plot 1: Bar chart of delays
+        col_names = list(delays.keys())
+        delay_values = [delays[col] for col in col_names]
+        colors = ['green' if d < 0 else 'red' for d in delay_values]
+        
+        bars = ax1.barh(col_names, delay_values, color=colors, alpha=0.7, edgecolor='black', linewidth=1)
+        ax1.axvline(x=0, color='black', linestyle='--', linewidth=2, label='No delay')
+        ax1.set_xlabel('Delay (samples)', fontsize=11, fontweight='bold')
+        ax1.set_ylabel('Sensor', fontsize=11, fontweight='bold')
+        ax1.set_title(f'Sensor Delay vs {ref_column}\n(Green=Leads, Red=Lags)', 
+                      fontsize=12, fontweight='bold')
+        ax1.grid(True, alpha=0.3, axis='x')
+        
+        # Add value labels on bars
+        for i, (col, delay) in enumerate(zip(col_names, delay_values)):
+            ax1.text(delay, i, f' {int(delay)}', va='center', 
+                    ha='left' if delay >= 0 else 'right', fontweight='bold', fontsize=9)
+        
+        # Plot 2: Correlation strength
+        correlation_values = [max_correlations[col] for col in col_names]
+        colors_corr = plt.cm.RdYlGn([(c + 1) / 2 for c in correlation_values])  # Map [-1,1] to colors
+        
+        bars2 = ax2.barh(col_names, correlation_values, color=colors_corr, alpha=0.8, edgecolor='black', linewidth=1)
+        ax2.set_xlabel('Cross-Correlation Strength', fontsize=11, fontweight='bold')
+        ax2.set_ylabel('Sensor', fontsize=11, fontweight='bold')
+        ax2.set_title(f'Correlation Quality\n(Closer to ±1 is stronger)', 
+                      fontsize=12, fontweight='bold')
+        ax2.set_xlim([-1.1, 1.1])
+        ax2.axvline(x=0, color='gray', linestyle=':', linewidth=1, alpha=0.5)
+        ax2.grid(True, alpha=0.3, axis='x')
+        
+        # Add value labels on correlation bars
+        for i, (col, corr) in enumerate(zip(col_names, correlation_values)):
+            ax2.text(corr, i, f' {corr:.3f}', va='center', 
+                    ha='left' if corr >= 0 else 'right', fontweight='bold', fontsize=9)
+        
         self.fig.tight_layout()
         self.draw()
 
@@ -1612,6 +1913,9 @@ class MeteoDataProcessor(QMainWindow):
             "Relative to Reference",
             "Correlation Scatter",
             "vs Reference",
+            "vs Reference (Delay Adjusted)",
+            "Difference vs Rate of Change",
+            "Delay Analysis",
         ])
         sensor_plot_layout.addWidget(self.sensor_plot_type_combo, 0, 1)
 
@@ -2691,6 +2995,9 @@ class MeteoDataProcessor(QMainWindow):
                     <li><b>Relative to Reference:</b> Show differences from a reference channel over time.</li>
                     <li><b>Correlation Scatter:</b> Multiple scatter plots comparing each channel to reference.</li>
                     <li><b>vs Reference:</b> Comprehensive three-panel plot showing scatter, residuals, and offset summary.</li>
+                    <li><b>vs Reference (Delay Adjusted):</b> Same three-panel comparison as "vs Reference" but automatically shifts each sensor by its calculated delay for temporal alignment. Shows how well sensors match when accounting for response lag.</li>
+                    <li><b>Difference vs Rate of Change:</b> Scatter plot showing sensor difference (y-axis) vs rate of change of reference sensor (x-axis). Useful for identifying dependencies on sensor drift speed.</li>
+                    <li><b>Delay Analysis:</b> Calculates and displays time lag between each sensor and reference using cross-correlation. Shows delay in samples and correlation strength. Green bars indicate sensors leading (negative delay), red bars indicate sensors lagging (positive delay).</li>
                 </ul>
                 
                 <h3>Using Sensor Analysis</h3>
@@ -3331,7 +3638,10 @@ Max: {column_data.max():.4f}"""
         if analysis_type == "Time Series":
             self.plot_canvas.plot_sensor_timeseries(df, selected_columns)
         elif analysis_type == "Bias Analysis":
-            self.plot_canvas.plot_sensor_bias(df, selected_columns)
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_sensor_bias(df, selected_columns, ref_column)
         elif analysis_type == "Relative to Reference":
             if not ref_column:
                 QMessageBox.warning(self, "Warning", "Please select a reference column.")
@@ -3347,6 +3657,21 @@ Max: {column_data.max():.4f}"""
                 QMessageBox.warning(self, "Warning", "Please select a reference column.")
                 return
             self.plot_canvas.plot_vs_reference(df, selected_columns, ref_column)
+        elif analysis_type == "vs Reference (Delay Adjusted)":
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_vs_reference_delay_adjusted(df, selected_columns, ref_column)
+        elif analysis_type == "Difference vs Rate of Change":
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_difference_vs_roc(df, selected_columns, ref_column)
+        elif analysis_type == "Delay Analysis":
+            if not ref_column:
+                QMessageBox.warning(self, "Warning", "Please select a reference column.")
+                return
+            self.plot_canvas.plot_delay_analysis(df, selected_columns, ref_column)
 
         self.update_status(f"Sensor plot generated: {analysis_type}")
 

@@ -69,7 +69,7 @@ A comprehensive PyQt5-based GUI application for processing, analyzing, and visua
 ### 🔹 Sensor Analysis Plots
 Specialized multi-channel sensor comparison plots (ported from MATT_N_Plotting_Tool):
 - **Time Series**: Overlay multiple sensor channels on a single time-series plot
-- **Bias Analysis**: Box plots showing each sensor's deviation from the ensemble mean, ranked by mean bias
+- **Bias Analysis**: Box plots showing each sensor's deviation from a selected reference sensor, ranked by mean bias
 - **Relative to Reference**: Time-series of each channel's difference from a chosen reference channel
 - **Correlation Scatter**: Individual scatter plots of each channel against a reference channel
 - **vs Reference**: Three-panel plot — scatter, residuals, and offset summary bar chart
@@ -165,7 +165,7 @@ chmod +x GENERIC_CSV_DATA_ANALYZER.py
    - Save plots as PNG images
    - For multi-sensor comparison, use the **Sensor Analysis Plots** group:
      - Select an analysis type (Time Series, Bias Analysis, etc.)
-     - Pick data columns and an optional reference column
+     - Pick data columns and select a reference column
      - Click "Generate Sensor Plot"
 
 5. **Apply Calibration** (if needed):
@@ -230,7 +230,7 @@ The "Sensor Analysis Plots" group in the Visualization tab provides specialized 
 | Plot Type | Description |
 |---|---|
 | **Time Series** | Overlay all selected channels on a single time-series chart |
-| **Bias Analysis** | Box plots of each channel's deviation from the ensemble mean, ranked by mean bias |
+| **Bias Analysis** | Box plots of each channel's deviation from the selected reference channel, ranked by mean bias |
 | **Relative to Reference** | Time-series of the difference between each channel and the reference channel |
 | **Correlation Scatter** | Individual scatter plots of each channel vs. the reference channel |
 | **vs Reference** | Three-panel view: scatter, residuals, and offset summary bar chart |
@@ -241,10 +241,10 @@ The "Sensor Analysis Plots" group in the Visualization tab provides specialized 
 2. In the **Visualization** tab, find the **Sensor Analysis Plots** group
 3. Select an **Analysis Type** from the dropdown
 4. In **Data Columns**, select one or more columns to analyze (multi-select supported)
-5. For plots that require a reference (Relative to Reference, Correlation Scatter, vs Reference), choose a **Reference Column**
+5. For plots that require a reference (Bias Analysis, Relative to Reference, Correlation Scatter, vs Reference), choose a **Reference Column**
 6. Click **Generate Sensor Plot**
 
-**Tip**: Use Bias Analysis to quickly identify sensors that are consistently reading high or low relative to the group mean.
+**Tip**: Use Bias Analysis to quickly identify sensors that are consistently reading high or low relative to your reference sensor.
 
 ## Calibration Methods
 
