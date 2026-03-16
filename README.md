@@ -12,6 +12,7 @@ A comprehensive PyQt5-based GUI application for processing, analyzing, and visua
 - [Installation](#installation)
 - [Usage](#usage)
 - [Key Features in Detail](#key-features-in-detail)
+- [Sensor Analysis Plots](#sensor-analysis-plots)
 - [Workflow](#workflow)
 - [Data Processing Options](#data-processing-options)
 - [Calibration Methods](#calibration-methods)
@@ -64,6 +65,15 @@ A comprehensive PyQt5-based GUI application for processing, analyzing, and visua
   - Rolling average visualization
   - Interactive matplotlib toolbar
   - Plot export to image files
+
+### 🔹 Sensor Analysis Plots
+Specialized multi-channel sensor comparison plots (ported from MATT_N_Plotting_Tool):
+- **Time Series**: Overlay multiple sensor channels on a single time-series plot
+- **Bias Analysis**: Box plots showing each sensor's deviation from the ensemble mean, ranked by mean bias
+- **Relative to Reference**: Time-series of each channel's difference from a chosen reference channel
+- **Correlation Scatter**: Individual scatter plots of each channel against a reference channel
+- **vs Reference**: Three-panel plot — scatter, residuals, and offset summary bar chart
+- Supports both `ch_zero_bme_temperature` and `Sensor0_BME_Temp` column naming conventions
 
 ### 🔹 Statistical Analysis
 - **Descriptive Statistics**: Mean, median, std, min, max, quartiles
@@ -153,6 +163,10 @@ chmod +x GENERIC_CSV_DATA_ANALYZER.py
    - Customize plot settings
    - Click "Generate Plot"
    - Save plots as PNG images
+   - For multi-sensor comparison, use the **Sensor Analysis Plots** group:
+     - Select an analysis type (Time Series, Bias Analysis, etc.)
+     - Pick data columns and an optional reference column
+     - Click "Generate Sensor Plot"
 
 5. **Apply Calibration** (if needed):
    - Navigate to "Calibration" tab
@@ -204,6 +218,33 @@ Supported resampling periods:
 **Remove Columns**: Select and remove multiple columns at once
 
 **Reorder Columns**: Drag-and-drop interface to reorder columns (datetime column always first)
+
+## Sensor Analysis Plots
+
+The "Sensor Analysis Plots" group in the Visualization tab provides specialized tools for comparing multiple sensor channels. These plots are ported from `MATT_N_Plotting_Tool.py` and support two column naming conventions:
+- `ch_zero_bme_temperature` (original format)
+- `Sensor0_BME_Temp` (new format)
+
+### Plot Types
+
+| Plot Type | Description |
+|---|---|
+| **Time Series** | Overlay all selected channels on a single time-series chart |
+| **Bias Analysis** | Box plots of each channel's deviation from the ensemble mean, ranked by mean bias |
+| **Relative to Reference** | Time-series of the difference between each channel and the reference channel |
+| **Correlation Scatter** | Individual scatter plots of each channel vs. the reference channel |
+| **vs Reference** | Three-panel view: scatter, residuals, and offset summary bar chart |
+
+### Using Sensor Analysis Plots
+
+1. Ensure your CSV data is loaded and processed
+2. In the **Visualization** tab, find the **Sensor Analysis Plots** group
+3. Select an **Analysis Type** from the dropdown
+4. In **Data Columns**, select one or more columns to analyze (multi-select supported)
+5. For plots that require a reference (Relative to Reference, Correlation Scatter, vs Reference), choose a **Reference Column**
+6. Click **Generate Sensor Plot**
+
+**Tip**: Use Bias Analysis to quickly identify sensors that are consistently reading high or low relative to the group mean.
 
 ## Calibration Methods
 
